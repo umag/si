@@ -1,9 +1,85 @@
-node_modules
-**/node_modules
-target
-tmp
-**/*.local
-**/*.ignore
-**/*.turbo
-**/dist
-**/tsconfig.tsbuildinfo
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+CHANGELOG*
+LICENSE*
+docs/
+
+# CI/CD
+.github/
+.ci/
+.gitlab-ci.yml
+
+# Development
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Node modules and build artifacts
+node_modules/
+dist/
+build/
+.next/
+.nuxt/
+.cache/
+
+# Rust build artifacts
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Buck2
+buck-out/
+.buckconfig.local
+
+# Testing
+coverage/
+.nyc_output/
+*.test.js
+*.spec.js
+__tests__/
+test/
+tests/
+
+# Logs
+*.log
+log/
+logs/
+
+# Environment files
+.env.local
+.env.*.local
+.env.development
+.env.test
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Backups
+*.backup
+*.bak
+*.tmp
+backups/
+
+# Scripts (not needed in container)
+scripts/
+
+# Tilt development
+Tiltfile
+dev/
+
+# Component images (already built)
+component/*/Dockerfile

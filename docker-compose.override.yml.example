@@ -1,0 +1,71 @@
+# Docker Compose Override Example
+# Copy this file to docker-compose.override.yml to customize your deployment
+# docker-compose.override.yml is automatically loaded when using docker-compose
+
+version: '3.8'
+
+services:
+  # Example: Add custom environment variables to SDF
+  # sdf:
+  #   environment:
+  #     - SI_OPENAI_API_KEY=sk-your-key-here
+  #     - RUST_LOG=debug
+
+  # Example: Expose additional ports
+  # postgres:
+  #   ports:
+  #     - "15432:5432"  # Expose on different port
+
+  # Example: Mount custom configuration
+  # web:
+  #   volumes:
+  #     - ./custom-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+
+  # Example: Change resource limits
+  # sdf:
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: '2'
+  #         memory: 2G
+
+  # Example: Use external database instead of containerized PostgreSQL
+  # Uncomment below and comment out postgres service in docker-compose.selfhost.yml
+  # postgres:
+  #   image: postgres:14
+  #   external: true
+  #   environment:
+  #     - POSTGRES_HOST=external-db.example.com
+  #     - POSTGRES_PORT=5432
+
+  # Example: Add a Redis service for auth-api sessions
+  # redis:
+  #   image: redis:7-alpine
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis_data:/data
+  #   restart: unless-stopped
+  #   networks:
+  #     - si-network
+
+  # Example: Add a reverse proxy (nginx or Traefik)
+  # nginx-proxy:
+  #   image: nginx:alpine
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./nginx-proxy.conf:/etc/nginx/nginx.conf:ro
+  #     - ./ssl:/etc/nginx/ssl:ro
+  #   depends_on:
+  #     - web
+  #     - auth-portal
+  #   restart: unless-stopped
+  #   networks:
+  #     - si-network
+
+# Example: Add additional volumes
+# volumes:
+#   redis_data:
+#     driver: local

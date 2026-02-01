@@ -1,0 +1,116 @@
+# Makefile for SI Self-Hosting
+# Provides convenient commands for building, deploying, and managing SI services
+
+.PHONY: help build push start stop restart logs clean registry
+
+# Default target
+.DEFAULT_GOAL := help
+
+# Configuration
+REGISTRY ?= localhost:5000
+COMPOSE_FILE = docker-compose.selfhost.yml
+BUILD_SCRIPT = ./scripts/build-and-push-local.sh
+
+help: ## Show this help message
+	@echo "SI Self-Hosting Commands"
+	@echo "========================"
+	@echo ""
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+	@echo ""
+
+registry: ## Start local Docker registry
+	@echo "Starting local Docker registry..."
+	@docker run -d -p 5000:5000 --name registry --restart=always registry:2 2>/dev/null || echo "Registry already running"
+
+build: ## Build all Docker images
+	@echo "Building all services..."
+	$(BUILD_SCRIPT)
+
+build-platform: ## Build only platform services
+	@echo "Building platform services..."
+	$(BUILD_SCRIPT) --skip-backend --skip-frontend
+
+build-backend: ## Build only backend services
+	@echo "Building backend services..."
+	$(BUILD_SCRIPT) --skip-platform --skip-frontend
+
+build-frontend: ## Build only frontend services
+	@echo "Building frontend services..."
+	$(BUILD_SCRIPT) --skip-platform --skip-backend
+
+build-debug: ## Build all services in debug mode (faster)
+	@echo "Building all services in debug mode..."
+	$(BUILD_SCRIPT) --debug
+
+start: ## Start all services
+	@echo "Starting services..."
+	docker-compose -f $(COMPOSE_FILE) up -d
+
+stop: ## Stop all services
+	@echo "Stopping services..."
+	docker-compose -f $(COMPOSE_FILE) down
+
+restart: stop start ## Restart all services
+
+status: ## Show status of all services
+	@docker-compose -f $(COMPOSE_FILE) ps
+
+logs: ## Show logs for all services
+	@docker-compose -f $(COMPOSE_FILE) logs -f
+
+logs-sdf: ## Show logs for SDF service
+	@docker-compose -f $(COMPOSE_FILE) logs -f sdf
+
+logs-web: ## Show logs for Web service
+	@docker-compose -f $(COMPOSE_FILE) logs -f web
+
+logs-auth-api: ## Show logs for Auth API service
+	@docker-compose -f $(COMPOSE_FILE) logs -f auth-api
+
+clean: ## Stop services and remove volumes (WARNING: deletes data)
+	@echo "WARNING: This will delete all data. Press Ctrl+C to cancel, or Enter to continue..."
+	@read confirm
+	docker-compose -f $(COMPOSE_FILE) down -v
+
+clean-images: ## Remove all SI Docker images
+	@echo "Removing SI Docker images..."
+	@docker images | grep "$(REGISTRY)/si-" | awk '{print $$3}' | xargs -r docker rmi -f
+
+backup-db: ## Backup PostgreSQL database
+	@echo "Backing up PostgreSQL database..."
+	@mkdir -p backups
+	@docker-compose -f $(COMPOSE_FILE) exec -T postgres pg_dumpall -U si > backups/backup-$$(date +%Y%m%d-%H%M%S).sql
+	@echo "Backup saved to backups/"
+
+restore-db: ## Restore PostgreSQL database (usage: make restore-db BACKUP=backups/backup.sql)
+	@if [ -z "$(BACKUP)" ]; then echo "Error: BACKUP variable not set. Usage: make restore-db BACKUP=backups/backup.sql"; exit 1; fi
+	@echo "Restoring PostgreSQL database from $(BACKUP)..."
+	@docker-compose -f $(COMPOSE_FILE) exec -T postgres psql -U si < $(BACKUP)
+
+shell-postgres: ## Open PostgreSQL shell
+	@docker-compose -f $(COMPOSE_FILE) exec postgres psql -U si
+
+shell-nats: ## Open NATS CLI
+	@docker-compose -f $(COMPOSE_FILE) exec nats nats-cli
+
+health: ## Check health of all services
+	@echo "Checking service health..."
+	@docker-compose -f $(COMPOSE_FILE) ps --format json | jq -r '.[] | "\(.Service): \(.Health)"'
+
+install: registry build start ## Full installation (registry + build + start)
+
+rebuild: stop build start ## Rebuild and restart all services
+
+update: build restart ## Update services (rebuild + restart)
+
+dev-logs: ## Show detailed logs for core services
+	@docker-compose -f $(COMPOSE_FILE) logs -f sdf veritech web auth-api
+
+.env: ## Create .env file from example
+	@if [ ! -f .env ]; then \
+		echo "Creating .env from .env.selfhost.example..."; \
+		cp .env.selfhost.example .env; \
+		echo "Please edit .env and set your passwords and secrets"; \
+	else \
+		echo ".env already exists"; \
+	fi

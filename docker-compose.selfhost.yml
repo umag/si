@@ -1,0 +1,358 @@
+---
+# Docker Compose for SI Self-Hosting
+# Excludes monitoring/telemetry and local dev services
+version: '3.8'
+
+services:
+  # ============================================================================
+  # Platform Services
+  # ============================================================================
+
+  postgres:
+    image: localhost:5000/si-postgres:latest
+    environment:
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-bugbear}
+      - PGPASSWORD=${POSTGRES_PASSWORD:-bugbear}
+      - POSTGRES_USER=${POSTGRES_USER:-si}
+      - POSTGRES_DB=${POSTGRES_DB:-si}
+      - POSTGRES_MULTIPLE_DBS=si_layer_db,si_auth,si_auth_prisma_shadow_db,si_module_index,si_audit
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "[ -f /tmp/ready ]"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - si-network
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - si-network
+
+  nats:
+    image: localhost:5000/si-nats:latest
+    command:
+      - "--config"
+      - "nats-server.conf"
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - nats_data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - si-network
+
+  spicedb:
+    image: localhost:5000/si-spicedb:latest
+    environment:
+      - SPICEDB_LOG_FORMAT=console
+      - SPICEDB_GRPC_PRESHARED_KEY=${SPICEDB_PRESHARED_KEY:-hobgoblin}
+      - SPICEDB_DATASTORE_ENGINE=memory
+      - ZED_KEYRING_PASSWORD=${ZED_KEYRING_PASSWORD:-orc}
+    ports:
+      - "50051:50051"
+    restart: unless-stopped
+    networks:
+      - si-network
+
+  otelcol:
+    image: localhost:5000/si-otelcol:latest
+    ports:
+      - "4317:4317"  # gRPC receiver
+      - "4318:4318"  # HTTP receiver
+    restart: unless-stopped
+    networks:
+      - si-network
+
+  versitygw:
+    image: localhost:5000/si-versitygw:latest
+    entrypoint: ["/bin/sh"]
+    command:
+      - "-c"
+      - |
+        /usr/local/bin/init-buckets.sh &&
+        exec /usr/local/bin/versitygw --port :9200 --access siadmin --secret bugbear posix /data
+    environment:
+      - VGW_DATA_DIR=/data
+    ports:
+      - "9200:9200"
+    volumes:
+      - versity_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "[ -f /tmp/ready ]"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - si-network
+
+  # ============================================================================
+  # Backend Services (Rust)
+  # ============================================================================
+
+  rebaser:
+    image: localhost:5000/si-rebaser:latest
+    environment:
+      - SI_LOG_JSON=${SI_LOG_JSON:-true}
+      - RUST_LOG=${RUST_LOG:-info}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otelcol:4317
+      - NATS_URL=nats://nats:4222
+      - POSTGRES_HOSTNAME=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DBNAME=${POSTGRES_DB:-si}
+      - POSTGRES_USER=${POSTGRES_USER:-si}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-bugbear}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+      otelcol:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - si-network
+
+  edda:
+    image: localhost:5000/si-edda:latest
+    environment:
+      - SI_LOG_JSON=${SI_LOG_JSON:-true}
+      - RUST_LOG=${RUST_LOG:-info}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otelcol:4317
+      - NATS_URL=nats://nats:4222
+    depends_on:
+      nats:
+        condition: service_started
+      otelcol:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - si-network
+
+  forklift:
+    image: localhost:5000/si-forklift:latest
+    environment:
+      - SI_LOG_JSON=${SI_LOG_JSON:-true}
+      - RUST_LOG=${RUST_LOG:-info}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otelcol:4317
+      - NATS_URL=nats://nats:4222
+    depends_on:
+      nats:
+        condition: service_started
+      otelcol:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - si-network
+
+  pinga:
+    image: localhost:5000/si-pinga:latest
+    environment:
+      - SI_LOG_JSON=${SI_LOG_JSON:-true}
+      - RUST_LOG=${RUST_LOG:-info}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otelcol:4317
+      - NATS_URL=nats://nats:4222
+    depends_on:
+      nats:
+        condition: service_started
+      otelcol:
+        condition: service_started
+      veritech:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - si-network
+
+  veritech:
+    image: localhost:5000/si-veritech:latest
+    environment:
+      - SI_LOG_JSON=${SI_LOG_JSON:-true}
+      - RUST_LOG=${RUST_LOG:-info}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otelcol:4317
+      - NATS_URL=nats://nats:4222
+      - POSTGRES_HOSTNAME=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DBNAME=${POSTGRES_DB:-si}
+      - POSTGRES_USER=${POSTGRES_USER:-si}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-bugbear}
+    depends_on:
+      nats:
+        condition: service_started
+      otelcol:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - si-network
+
+  module-index:
+    image: localhost:5000/si-module-index:latest
+    environment:
+      - SI_LOG_JSON=${SI_LOG_JSON:-true}
+      - RUST_LOG=${RUST_LOG:-info}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otelcol:4317
+      - POSTGRES_HOSTNAME=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DBNAME=si_module_index
+      - POSTGRES_USER=${POSTGRES_USER:-si}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-bugbear}
+    ports:
+      - "5157:5157"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      otelcol:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - si-network
+
+  sdf:
+    image: localhost:5000/si-sdf:latest
+    environment:
+      - SI_LOG_JSON=${SI_LOG_JSON:-true}
+      - RUST_LOG=${RUST_LOG:-info}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otelcol:4317
+      - NATS_URL=nats://nats:4222
+      - POSTGRES_HOSTNAME=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DBNAME=${POSTGRES_DB:-si}
+      - POSTGRES_USER=${POSTGRES_USER:-si}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-bugbear}
+      - SPICEDB_URL=spicedb:50051
+      - SPICEDB_PRESHARED_KEY=${SPICEDB_PRESHARED_KEY:-hobgoblin}
+      - MODULE_INDEX_URL=http://module-index:5157
+      - AUTH_API_URL=${AUTH_API_URL:-http://auth-api:9001}
+    ports:
+      - "5156:5156"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      spicedb:
+        condition: service_started
+      nats:
+        condition: service_started
+      otelcol:
+        condition: service_started
+      pinga:
+        condition: service_started
+      veritech:
+        condition: service_started
+      rebaser:
+        condition: service_started
+      edda:
+        condition: service_started
+      forklift:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5156/api/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - si-network
+
+  # ============================================================================
+  # Backend Services (Node.js)
+  # ============================================================================
+
+  auth-api:
+    image: localhost:5000/si-auth-api:latest
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-si}:${POSTGRES_PASSWORD:-bugbear}@postgres:5432/si_auth
+      # Local Auth Mode - bypasses Auth0 (default: true for self-hosting)
+      - LOCAL_AUTH_MODE=${LOCAL_AUTH_MODE:-true}
+      # Auth0 credentials (only required if LOCAL_AUTH_MODE=false)
+      - AUTH0_DOMAIN=${AUTH0_DOMAIN}
+      - AUTH0_CLIENT_ID=${AUTH0_CLIENT_ID}
+      - AUTH0_CLIENT_SECRET=${AUTH0_CLIENT_SECRET}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - JWT_SECRET=${JWT_SECRET}
+      - PORT=9001
+    ports:
+      - "9001:9001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - si-network
+
+  # ============================================================================
+  # Frontend Services
+  # ============================================================================
+
+  web:
+    image: localhost:5000/si-web:latest
+    ports:
+      - "8080:80"
+    depends_on:
+      sdf:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - si-network
+
+  auth-portal:
+    image: localhost:5000/si-auth-portal:latest
+    ports:
+      - "9000:80"
+    depends_on:
+      auth-api:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - si-network
+
+  docs:
+    image: localhost:5000/si-docs:latest
+    ports:
+      - "5173:80"
+    restart: unless-stopped
+    networks:
+      - si-network
+
+# ============================================================================
+# Volumes
+# ============================================================================
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  nats_data:
+    driver: local
+  versity_data:
+    driver: local
+
+# ============================================================================
+# Networks
+# ============================================================================
+networks:
+  si-network:
+    driver: bridge

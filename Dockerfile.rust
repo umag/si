@@ -1,0 +1,80 @@
+# Generic Dockerfile for Rust services
+# Build with: docker build --build-arg SERVICE=sdf -f Dockerfile.rust -t si-sdf .
+
+ARG RUST_VERSION=1.86
+ARG DEBIAN_VERSION=bookworm-slim
+
+# Stage 1: Buck2 installer
+FROM alpine:3 AS buck2
+RUN apk add --no-cache curl zstd libc6-compat
+RUN ARCH=$(uname -m); \
+    case "$ARCH" in \
+        x86_64) BUCK2_ARCH="x86_64";; \
+        aarch64) BUCK2_ARCH="aarch64";; \
+        arm64) BUCK2_ARCH="aarch64";; \
+        *) echo "unsupported arch $ARCH" && exit 1;; \
+    esac; \
+    curl -L \
+        "https://github.com/facebook/buck2/releases/download/latest/buck2-${BUCK2_ARCH}-unknown-linux-musl.zst" \
+        -o /tmp/buck2.zst && \
+    unzstd /tmp/buck2.zst -c > /bin/buck2 && chmod +x /bin/buck2
+
+# Stage 2: Builder with Rust toolchain
+FROM rust:${RUST_VERSION}-${DEBIAN_VERSION} AS builder
+ARG SERVICE
+ARG BUILD_MODE=release
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workdir
+COPY --from=buck2 /bin/buck2 /usr/local/bin/buck2
+
+# Copy entire source tree (Buck2 needs the full workspace)
+COPY . .
+
+# Build the service using Buck2
+RUN if [ "$BUILD_MODE" = "debug" ]; then \
+        buck2 build @//mode/debug //bin/${SERVICE}:${SERVICE}; \
+    else \
+        buck2 build @//mode/release //bin/${SERVICE}:${SERVICE}; \
+    fi && \
+    buck2 build @//mode/${BUILD_MODE} //bin/${SERVICE}:${SERVICE} --out /tmp/local-bin/${SERVICE}
+
+# Stage 3: Runtime image
+FROM debian:${DEBIAN_VERSION} AS runtime
+ARG SERVICE
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/* && \
+    adduser --disabled-password --gecos '' app
+
+# Create necessary directories
+RUN for dir in /run /etc /usr/local/etc /home/app/.config; do \
+        mkdir -pv "$dir/${SERVICE}"; \
+    done
+
+WORKDIR /run/${SERVICE}
+
+# Copy binary from builder
+COPY --from=builder /tmp/local-bin/${SERVICE} /usr/local/bin/${SERVICE}
+
+# Copy configuration files (if they exist)
+COPY --from=builder /workdir/config /etc/si-config
+
+# Set ownership
+RUN chown -R app:app /run/${SERVICE} /home/app
+
+USER app
+
+# The entrypoint will be overridden in docker-compose for service-specific args
+ENTRYPOINT ["/bin/sh", "-c"]
+CMD ["/usr/local/bin/${SERVICE}"]
